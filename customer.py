@@ -5,6 +5,8 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import seaborn as sns
+import plotly.express as px
+import base64
 
 def load_data():
     uploaded_file = st.sidebar.file_uploader("Upload your CSV file", type=["csv"])
@@ -14,11 +16,18 @@ def load_data():
     return pd.DataFrame()
 
 def preprocess_data(data):
-    data['CustomerID'] = data['CustomerID'].astype(str)
-    data['InvoiceDate'] = pd.to_datetime(data['InvoiceDate'])
-    data['Monetary'] = data['Quantity'] * data['UnitPrice']
-    data.dropna(subset=['InvoiceDate', 'CustomerID', 'Monetary'], inplace=True)
-    return data
+    try:
+        data['CustomerID'] = data['CustomerID'].astype(str)
+        data['InvoiceDate'] = pd.to_datetime(data['InvoiceDate'])
+        data['Monetary'] = data['Quantity'] * data['UnitPrice']
+        data.dropna(subset=['InvoiceDate', 'CustomerID', 'Monetary'], inplace=True)
+        return data
+    except KeyError as e:
+        st.error(f"Missing required column: {e}")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error processing data: {e}")
+        return pd.DataFrame()
 
 def calculate_rfm(data):
     latest_date = data['InvoiceDate'].max() + pd.DateOffset(days=1)
@@ -43,6 +52,17 @@ def plot_clusters(data):
     sns.scatterplot(data=data, x='Recency', y='Monetary', hue='Cluster', ax=ax[2], palette='viridis')
     st.pyplot(fig)
 
+def plot_pie_chart(data):
+    cluster_counts = data['Cluster'].value_counts().reset_index()
+    cluster_counts.columns = ['Cluster', 'Count']
+    fig = px.pie(cluster_counts, names='Cluster', values='Count', title='Cluster Distribution')
+    st.plotly_chart(fig)
+
+def plot_bar_chart(data):
+    cluster_means = data.groupby('Cluster').mean().reset_index()
+    fig = px.bar(cluster_means, x='Cluster', y=['Recency', 'Frequency', 'Monetary'], title='Average RFM Values per Cluster')
+    st.plotly_chart(fig)
+
 def display_segment_insights(data):
     st.write("Segment Insights")
     for cluster in sorted(data['Cluster'].unique()):
@@ -52,16 +72,33 @@ def display_segment_insights(data):
         st.write(f"Average Frequency: {cluster_data['Frequency'].mean():.2f}")
         st.write(f"Average Monetary: ${cluster_data['Monetary'].mean():.2f}")
 
+def download_results(data):
+    csv = data.to_csv(index=False)
+    b64 = base64.b64encode(csv.encode()).decode()
+    href = f'<a href="data:file/csv;base64,{b64}" download="customer_segments.csv">Download CSV file</a>'
+    st.markdown(href, unsafe_allow_html=True)
+
 def main():
     st.title('Customer Segmentation Dashboard')
     data = load_data()
     if not data.empty:
-        data = preprocess_data(data)
-        rfm_data = calculate_rfm(data)
-        rfm_data = apply_kmeans(rfm_data)
-        st.write("Data Overview", rfm_data.head())
-        plot_clusters(rfm_data)
-        display_segment_insights(rfm_data)
+        if set(['CustomerID', 'InvoiceDate', 'Quantity', 'UnitPrice', 'InvoiceNo']).issubset(data.columns):
+            data = preprocess_data(data)
+            if not data.empty:
+                rfm_data = calculate_rfm(data)
+                st.sidebar.subheader('Clustering Options')
+                n_clusters = st.sidebar.slider('Number of clusters', 2, 10, 3)
+                rfm_data = apply_kmeans(rfm_data, n_clusters)
+                st.write("Data Overview", rfm_data.head())
+                plot_clusters(rfm_data)
+                plot_pie_chart(rfm_data)
+                plot_bar_chart(rfm_data)
+                display_segment_insights(rfm_data)  # Display segment insights here
+                st.sidebar.subheader('Download Results')
+                if st.sidebar.button('Download CSV'):
+                    download_results(rfm_data)
+        else:
+            st.error("Uploaded data does not contain required columns: CustomerID, InvoiceDate, Quantity, UnitPrice, InvoiceNo")
     else:
         st.info("Please upload data to begin analysis.")
 
